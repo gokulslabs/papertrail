@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useRef, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent } from "react";
 import {
   Upload,
   Lock,
@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { LandingHeader } from "@/components/site-header";
+import { LandingHeader, MAIN_CONTENT_ID } from "@/components/site-header";
 import { Button } from "@/components/ui/button";
 import { addFiles, addSampleDocuments } from "@/lib/use-library";
 import { listDocuments, setWorkspace } from "@/lib/db";
@@ -43,6 +43,24 @@ function Index() {
   const [busy, setBusy] = useState(false);
   const filesInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const onPaste = (event: ClipboardEvent) => {
+      const items = event.clipboardData?.items;
+      if (!items) return;
+      const files: File[] = [];
+      for (const item of items) {
+        if (item.kind !== "file") continue;
+        const file = item.getAsFile();
+        if (file?.type.startsWith("image/")) files.push(file);
+      }
+      if (!files.length) return;
+      event.preventDefault();
+      startWith(files);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
 
   const startWith = (picked: File[]) => {
     if (!picked.length) return;
@@ -80,7 +98,7 @@ function Index() {
     <div className="min-h-screen bg-background">
       <LandingHeader />
 
-      <main className="mx-auto w-full max-w-6xl px-6">
+      <main id={MAIN_CONTENT_ID} className="mx-auto w-full max-w-6xl px-6">
         <section className="mx-auto max-w-2xl pt-14 pb-10 text-center sm:pt-20">
           <h1 className="text-ink-serif text-5xl leading-[1.08] font-semibold sm:text-6xl">
             Your documents.
@@ -111,7 +129,8 @@ function Index() {
               Drop files here to start your library
             </h2>
             <p className="mt-1.5 text-sm text-muted-foreground">
-              PDF, JPEG, PNG, WebP, TXT, Markdown and CSV · multiple files or whole folders
+              PDF, JPEG, PNG, WebP, TXT, Markdown and CSV · multiple files or whole folders · paste an
+              image
             </p>
             <div className="mt-6 flex flex-col items-center gap-3">
               <Button size="lg" onClick={() => filesInput.current?.click()} disabled={busy}>
@@ -125,6 +144,18 @@ function Index() {
               >
                 or choose a folder
               </button>
+              <Button
+                variant="outline"
+                size="lg"
+                className="mt-1"
+                disabled={busy}
+                onClick={() => {
+                  setWorkspace("main");
+                  void navigate({ to: "/library" });
+                }}
+              >
+                Enter library
+              </Button>
             </div>
             <input
               ref={filesInput}

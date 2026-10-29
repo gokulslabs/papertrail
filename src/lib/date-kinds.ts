@@ -1,6 +1,7 @@
 import type { DocDate } from "./types";
 
 export const DATE_KINDS = {
+  birthday: { label: "Birthday", past: "Birthday", remindDays: 7 },
   warranty: { label: "Warranty expires", past: "Warranty expired", remindDays: 30 },
   "insurance-renewal": { label: "Insurance renewal", past: "Renewal date passed", remindDays: 30 },
   "agreement-end": { label: "Agreement ends", past: "Agreement ended", remindDays: 60 },
@@ -13,6 +14,7 @@ export const DATE_KINDS = {
 export type DateKind = keyof typeof DATE_KINDS;
 
 export const DATE_KIND_ORDER: DateKind[] = [
+  "birthday",
   "warranty",
   "insurance-renewal",
   "agreement-end",

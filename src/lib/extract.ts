@@ -39,8 +39,16 @@ export function acceptAttribute(): string {
 export interface PdfExtract {
   text: string;
   pageCount: number;
+  /** Pages whose text layer was non-empty. */
+  pagesWithText: number;
   title: string | null;
   thumbnail: Blob | null;
+}
+
+export interface OcrResult {
+  text: string;
+  /** Tesseract confidence 0–100. */
+  confidence: number;
 }
 
 interface PdfjsModule {
@@ -105,6 +113,7 @@ export async function extractPdf(file: Blob, password?: string): Promise<PdfExtr
 
   let thumbnail: Blob | null = null;
   const chunks: string[] = [];
+  let pagesWithText = 0;
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i);
     if (i === 1) thumbnail = await renderPdfThumbnail(pdfjs, doc);
@@ -117,7 +126,9 @@ export async function extractPdf(file: Blob, password?: string): Promise<PdfExtr
         else line += " ";
       }
     }
-    chunks.push(line.trim());
+    const pageText = line.trim();
+    if (pageText) pagesWithText++;
+    chunks.push(pageText);
     page.cleanup();
   }
   let metaTitle: string | null = null;
@@ -131,15 +142,22 @@ export async function extractPdf(file: Blob, password?: string): Promise<PdfExtr
     /* metadata is optional */
   }
   await destroyPdfDoc(doc);
-  return { text: chunks.join("\n\n"), pageCount: doc.numPages, title: metaTitle, thumbnail };
+  return {
+    text: chunks.join("\n\n"),
+    pageCount: doc.numPages,
+    pagesWithText,
+    title: metaTitle,
+    thumbnail,
+  };
 }
 
 /** Render every PDF page to a canvas, streaming one page at a time. */
 export async function renderPdfPages(
   file: Blob,
   maxWidth: number,
-  onPage: (canvas: HTMLCanvasElement) => void,
+  onPage: (canvas: HTMLCanvasElement, pageNumber: number, total: number) => void,
   password?: string,
+  scaleFactor = 1,
 ): Promise<number> {
   const pdfjs = await loadPdfjs();
   const data = await file.arrayBuffer();
@@ -147,18 +165,20 @@ export async function renderPdfPages(
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i);
     const base = page.getViewport({ scale: 1 });
-    const scale = Math.min(1.25, Math.max(0.4, maxWidth / base.width));
+    const fit = Math.min(1.25, Math.max(0.4, maxWidth / base.width));
+    const scale = fit * scaleFactor;
     const viewport = page.getViewport({ scale });
     const canvas = document.createElement("canvas");
     canvas.width = Math.ceil(viewport.width);
     canvas.height = Math.ceil(viewport.height);
     canvas.className = "mx-auto block h-auto w-full max-w-full rounded-md shadow-sm";
+    canvas.dataset.page = String(i);
     const ctx = canvas.getContext("2d");
     if (ctx) {
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       await page.render({ canvas, canvasContext: ctx, viewport }).promise;
-      onPage(canvas);
+      onPage(canvas, i, doc.numPages);
     }
     page.cleanup();
   }
@@ -194,7 +214,7 @@ export async function readTextFile(file: File): Promise<string> {
 export async function ocrImage(
   file: File | Blob,
   onProgress?: (status: string, progress: number) => void,
-): Promise<string> {
+): Promise<OcrResult> {
   const { createWorker } = await import("tesseract.js");
   const worker = await createWorker("eng", 1, {
     workerPath: "/tesseract/worker.min.js",
@@ -206,7 +226,10 @@ export async function ocrImage(
   });
   try {
     const { data } = await worker.recognize(file);
-    return (data.text || "").trim();
+    return {
+      text: (data.text || "").trim(),
+      confidence: typeof data.confidence === "number" ? data.confidence : 0,
+    };
   } finally {
     await worker.terminate();
   }

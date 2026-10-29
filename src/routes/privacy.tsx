@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
 
-import { SiteHeader, appFrameClass } from "@/components/site-header";
+import { SiteHeader, appFrameClass, MAIN_CONTENT_ID } from "@/components/site-header";
 import { Button } from "@/components/ui/button";
 
 export const Route = createFileRoute("/privacy")({
@@ -29,7 +29,7 @@ function PrivacyPage() {
   return (
     <div className={appFrameClass}>
       <SiteHeader />
-      <main className="mx-auto w-full max-w-2xl px-6 pb-24">
+      <main id={MAIN_CONTENT_ID} className="mx-auto w-full max-w-2xl px-6 pb-24">
         <p className="text-sm font-medium tracking-wide text-muted-foreground uppercase">Privacy</p>
         <h1 className="text-ink-serif mt-2 text-4xl font-semibold">How your data is handled</h1>
 
@@ -43,9 +43,14 @@ function PrivacyPage() {
             <h2 className="text-lg font-semibold">Your files stay in this browser</h2>
             <p>
               When you add a document, your browser reads it and stores the original file, its
-              extracted text, a small thumbnail and the details you add (title, tags, notes,
-              dates) in this site's local database (IndexedDB) on this device. None of it is
-              uploaded anywhere.
+              extracted text (including how it was obtained, character counts and OCR confidence
+              when applicable), a content checksum, a small thumbnail and the details you add
+              (title, tags, notes, document date, important dates) in this site's local database
+              (IndexedDB) on this device. None of it is uploaded anywhere.
+            </p>
+            <p>
+              Optional backup exports can be password-encrypted on your device before download, and
+              per-document highlights or annotations stay in this browser only.
             </p>
             <p>
               The page's Content Security Policy only allows network connections to this website's
@@ -112,8 +117,8 @@ function PrivacyPage() {
               <Link to="/settings" className="underline underline-offset-2 hover:text-foreground">
                 Settings → Backup &amp; restore
               </Link>
-              . The backup is a normal ZIP file with your original files and a manifest; it isn't
-              encrypted, so store it somewhere you trust. Your library doesn't sync between
+              . The backup is a normal ZIP file with your original files and a manifest (you can
+              encrypt it with a password in Settings). Store it somewhere you trust. Your library doesn't sync between
               devices — to move it, export a backup and restore it in the other browser.
             </p>
           </section>

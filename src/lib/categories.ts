@@ -192,6 +192,21 @@ export async function removeLibraryTag(name: string): Promise<void> {
   }
 }
 
+/** Rename a tag on every document and in the library tags list. */
+export async function renameLibraryTag(from: string, to: string): Promise<void> {
+  const next = to.trim();
+  if (!from || !next || from === next) return;
+  const tags = await getLibraryTags();
+  const without = tags.filter((tag) => tag !== from && tag.toLowerCase() !== next.toLowerCase());
+  await setMeta(TAGS_KEY, [...without, next]);
+  const docs = await listDocuments();
+  for (const doc of docs) {
+    if (!doc.tags.includes(from)) continue;
+    const updated = [...new Set(doc.tags.map((tag) => (tag === from ? next : tag)))];
+    await patchDocument(doc.id, { tags: updated });
+  }
+}
+
 /** Category → document count, built-ins first in their fixed order. */
 export function countByCategory(docs: DocumentRecord[]): Map<string, number> {
   const counts = new Map<string, number>();

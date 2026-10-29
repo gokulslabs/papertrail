@@ -3,9 +3,10 @@ import { toast } from "sonner";
 import type { DocumentRecord, Workspace } from "./types";
 import { getWorkspace, listDocuments, onChanged, setWorkspace } from "./db";
 import { processFile } from "./process";
-import { loadSampleDocuments, sampleCount } from "./samples";
+import { sampleCount, startSampleImport } from "./samples";
 import { KIND_LABEL } from "./extract";
 import { MAX_DOCUMENT_BYTES } from "./limits";
+import { runImport } from "./import-queue";
 
 /** Subscribe to the current workspace's documents. */
 export function useLibrary() {
@@ -28,7 +29,7 @@ export function useLibrary() {
   return { docs, workspace, refresh };
 }
 
-/** Add user files to the current library, with progress toasts. */
+/** Add user files to the current library via the import progress panel. */
 export async function addFiles(
   files: File[],
   opts?: { silent?: boolean },
@@ -51,43 +52,37 @@ export async function addFiles(
     }
     return 0;
   }
-  if (tooBig && !opts?.silent) toast.error(`${tooBig} ${tooBig === 1 ? "file was" : "files were"} over 32 MB and skipped`);
-  const toastId = opts?.silent ? undefined : toast.loading(`Reading 1 of ${accepted.length}…`);
-  let saved = 0;
-  let index = 0;
-  for (const file of accepted) {
-    index++;
-    if (toastId) toast.loading(`Reading ${index} of ${accepted.length}… ${file.name}`, { id: toastId });
-    try {
-      await processFile(file);
-      saved++;
-    } catch (err) {
-      console.error("Failed to read file", file.name, err);
-      toast.error(`Could not read ${file.name}`);
+  if (tooBig && !opts?.silent) {
+    toast.error(`${tooBig} ${tooBig === 1 ? "file was" : "files were"} over 32 MB and skipped`);
+  }
+
+  if (opts?.silent) {
+    let saved = 0;
+    for (const file of accepted) {
+      try {
+        await processFile(file);
+        saved++;
+      } catch (err) {
+        console.error("Failed to read file", file.name, err);
+      }
     }
+    return saved;
   }
-  if (toastId) {
-    if (saved === 0) toast.error("Nothing was added", { id: toastId });
-    else toast.success(`Added ${saved} ${saved === 1 ? "document" : "documents"}`, { id: toastId });
-  }
-  return saved;
+
+  return runImport(accepted);
 }
 
-/** Load the sample workspace contents. */
+/** Load the sample workspace contents through the import progress panel. */
 export async function addSampleDocuments(): Promise<void> {
-  const toastId = toast.loading("Preparing sample workspace…");
   try {
-    const loaded = await loadSampleDocuments((title, i, total) => {
-      toast.loading(`Preparing sample ${i} of ${total}… ${title}`, { id: toastId });
-    });
-    const total = sampleCount();
-    if (loaded === 0) toast.error("Could not prepare the sample workspace", { id: toastId });
-    else if (loaded < total) {
-      toast.error(`Loaded ${loaded} of ${total} samples. Some files are missing.`, { id: toastId });
-    } else toast.success("Sample workspace ready", { id: toastId });
+    const loaded = await startSampleImport();
+    if (loaded === 0) toast.error("Could not prepare the sample workspace");
+    else if (loaded < sampleCount()) {
+      toast.error(`Loaded ${loaded} of ${sampleCount()} samples. Some files are missing.`);
+    }
   } catch (err) {
     console.error(err);
-    toast.error("Could not prepare the sample workspace", { id: toastId });
+    toast.error("Could not prepare the sample workspace");
   }
 }
 

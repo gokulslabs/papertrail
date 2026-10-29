@@ -2,7 +2,7 @@ import { openDB, deleteDB, type DBSchema, type IDBPDatabase } from "idb";
 import type { DocumentRecord, Workspace } from "./types";
 
 const DB_PREFIX = "privytrail";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const WORKSPACE_KEY = "privytrail.workspace";
 
 interface PTDB extends DBSchema {
@@ -63,9 +63,12 @@ export async function getDb(): Promise<IDBPDatabase<PTDB>> {
         if (!db.objectStoreNames.contains("files")) {
           db.createObjectStore("files");
         }
-        if (oldVersion >= 1 && oldVersion < 2) {
-          const raw = (event.target as IDBOpenDBRequest).transaction;
-          if (raw) moveBlobsToFileStore(raw);
+        const raw = (event.target as IDBOpenDBRequest).transaction;
+        if (oldVersion >= 1 && oldVersion < 2 && raw) {
+          moveBlobsToFileStore(raw);
+        }
+        if (oldVersion < 3 && raw) {
+          backfillExtractionFields(raw);
         }
       },
       blocking() {
@@ -95,6 +98,36 @@ function moveBlobsToFileStore(raw: IDBTransaction): void {
     if (value?.blob instanceof Blob) {
       files.put(value.blob, cursor.primaryKey);
       cursor.update({ ...value, blob: null });
+    }
+    cursor.continue();
+  };
+}
+
+/**
+ * v3: attach extraction metadata derived from existing text/ocrStatus.
+ * SHA-256 and documentDate are left absent until computed/confirmed later.
+ */
+function backfillExtractionFields(raw: IDBTransaction): void {
+  const docs = raw.objectStore("documents");
+  const request = docs.openCursor();
+  request.onsuccess = () => {
+    const cursor = request.result;
+    if (!cursor) return;
+    const value = cursor.value as DocumentRecord;
+    if (value && !value.extraction) {
+      const text = value.text || "";
+      let source: NonNullable<DocumentRecord["extraction"]>["source"] = "none";
+      if (text) {
+        if (value.ocrStatus === "done") source = "ocr";
+        else if (value.kind === "pdf") source = "pdf-text";
+        else if (value.kind === "text" || value.kind === "markdown" || value.kind === "csv") source = "plain";
+        else if (value.kind === "image") source = "ocr";
+        else source = "plain";
+      }
+      cursor.update({
+        ...value,
+        extraction: { source, characters: text.length },
+      });
     }
     cursor.continue();
   };

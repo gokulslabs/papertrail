@@ -5,6 +5,7 @@ export interface DateDraft {
   date: string;
   note: string;
   remindDays: number | null;
+  recurrence?: "none" | "yearly";
 }
 
 export function DateFields({
@@ -62,13 +63,32 @@ export function DateFields({
           ))}
         </select>
       </label>
+      <label className="text-xs font-medium text-muted-foreground">
+        Repeat
+        <select
+          className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground"
+          value={value.recurrence ?? "none"}
+          onChange={(e) =>
+            onChange({ ...value, recurrence: e.target.value === "yearly" ? "yearly" : "none" })
+          }
+        >
+          <option value="none">Does not repeat</option>
+          <option value="yearly">Every year</option>
+        </select>
+      </label>
       <label className="text-xs font-medium text-muted-foreground sm:col-span-2">
         Note <span className="font-normal">(optional)</span>
         <input
           className="mt-1 h-9 w-full rounded-md border border-input bg-background px-2 text-sm text-foreground"
           maxLength={120}
           value={value.note}
-          placeholder={value.kind === "other" ? "e.g. Car service due" : "e.g. AppleCare+"}
+          placeholder={
+            value.kind === "birthday"
+              ? "e.g. Mom, girlfriend"
+              : value.kind === "other"
+                ? "e.g. Car service due"
+                : "e.g. AppleCare+"
+          }
           onChange={(e) => onChange({ ...value, note: e.target.value })}
         />
       </label>

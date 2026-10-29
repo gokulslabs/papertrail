@@ -1,29 +1,50 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Outlet, Link, createRootRouteWithContext, useRouter, HeadContent, Scripts, type ErrorComponentProps } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { Toaster } from "@/components/ui/sonner";
+import { ImportProgressPanel } from "@/components/import-progress";
+import { SiteHeader, appFrameClass } from "@/components/site-header";
+import { listenForInstallPrompt, registerServiceWorker } from "@/lib/pwa";
 
 function NotFoundComponent() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="max-w-md text-center">
-        <h1 className="text-7xl font-bold text-foreground">404</h1>
-        <h2 className="mt-4 text-xl font-semibold text-foreground">Page not found</h2>
+    <div className={appFrameClass}>
+      <SkipToContent />
+      <SiteHeader />
+      <main id="content" className="mx-auto flex min-h-[60vh] max-w-md flex-col items-center justify-center px-6 py-24 text-center">
+        <h1 className="text-2xl font-semibold text-foreground">Page not found</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           The page you're looking for doesn't exist or has been moved.
         </p>
-        <div className="mt-6">
+        <div className="mt-6 flex flex-wrap justify-center gap-2">
+          <Link
+            to="/library"
+            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            Go to your library
+          </Link>
           <Link
             to="/"
-            className="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+            className="inline-flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
           >
             Go home
           </Link>
         </div>
-      </div>
+      </main>
     </div>
+  );
+}
+
+function SkipToContent() {
+  return (
+    <a
+      href="#content"
+      className="sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-sm focus:text-primary-foreground"
+    >
+      Skip to content
+    </a>
   );
 }
 
@@ -84,6 +105,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "referrer", content: "no-referrer" },
       { name: "theme-color", content: "#f6f4ef", media: "(prefers-color-scheme: light)" },
       { name: "theme-color", content: "#12141a", media: "(prefers-color-scheme: dark)" },
+      { name: "mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-status-bar-style", content: "default" },
+      { name: "apple-mobile-web-app-title", content: "Privytrail" },
+      { name: "application-name", content: "Privytrail" },
       { httpEquiv: "Content-Security-Policy", content: CONTENT_SECURITY_POLICY },
       { title: "Privytrail — your private document memory" },
       {
@@ -104,6 +130,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { rel: "stylesheet", href: appCss },
       { rel: "icon", href: "/favicon.svg", type: "image/svg+xml" },
       { rel: "icon", href: "/favicon.ico", sizes: "any" },
+      { rel: "apple-touch-icon", href: "/icons/icon-192.png" },
+      { rel: "manifest", href: "/manifest.webmanifest" },
     ],
   }),
   shellComponent: RootShell,
@@ -132,10 +160,17 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
 
+  useEffect(() => {
+    registerServiceWorker();
+    return listenForInstallPrompt();
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
+      <SkipToContent />
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
+      <ImportProgressPanel />
       <Toaster position="bottom-right" />
     </QueryClientProvider>
   );

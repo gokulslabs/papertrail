@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   HardDriveDownload,
   FolderUp,
@@ -12,7 +12,8 @@ import {
 import { toast } from "sonner";
 import type { DocumentRecord } from "@/lib/types";
 
-import { SiteHeader, appFrameClass } from "@/components/site-header";
+import { SiteHeader, appFrameClass, MAIN_CONTENT_ID } from "@/components/site-header";
+import { InstallAppCard } from "@/components/install-app";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -30,8 +31,11 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { exportBackup, inspectBackup, commitRestore, type RestoreMode, type RestorePlan } from "@/lib/backup";
+import { decryptBlob, looksEncrypted } from "@/lib/crypto-backup";
+import { findDuplicateGroups } from "@/lib/duplicates";
 import { useLibrary, addSampleDocuments } from "@/lib/use-library";
 import { clearWorkspace, deleteWorkspaceData, setWorkspace, getMeta, setMeta, listDocuments, patchDocument } from "@/lib/db";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   BUILT_IN_CATEGORIES,
   addCustomCategory,
@@ -42,6 +46,7 @@ import {
   documentsForRule,
   getCustomCategories,
   getLibraryTags,
+  renameLibraryTag,
   getRules,
   removeCustomCategory,
   removeLibraryTag,
@@ -66,12 +71,21 @@ export const Route = createFileRoute("/settings")({
 function SettingsPage() {
   const navigate = useNavigate();
   const { workspace, docs } = useLibrary();
-  const [autoOcr, setAutoOcr] = useState(false);
+  const [autoOcr, setAutoOcr] = useState(true);
   const [restoreMode, setRestoreMode] = useState<RestoreMode>("merge");
   const [restoring, setRestoring] = useState(false);
   const [storage, setStorage] = useState<{ usage: number; quota: number } | null>(null);
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const [lastBackup, setLastBackup] = useState<string | null>(null);
+  const [backupEncrypt, setBackupEncrypt] = useState(false);
+  const [backupPassword, setBackupPassword] = useState("");
+  const [backupRemindDays, setBackupRemindDays] = useState(30);
+  const [health, setHealth] = useState<{
+    duplicateGroups: number;
+    uncategorized: number;
+    autoOcr: boolean;
+    persisted: boolean | null;
+  } | null>(null);
 
   const refreshStorage = () => {
     if (navigator.storage?.estimate) {
@@ -83,16 +97,31 @@ function SettingsPage() {
   };
 
   useEffect(() => {
-    void getMeta<boolean>("autoOcr", false).then(setAutoOcr);
+    void getMeta<boolean>("autoOcr", true).then(setAutoOcr);
     void getMeta<string | null>("lastBackup", null).then(setLastBackup);
+    void getMeta<number>("backupRemindDays", 30).then((n) => setBackupRemindDays(typeof n === "number" && n > 0 ? n : 30));
     refreshStorage();
   }, [workspace]);
+
+  useEffect(() => {
+    const uncategorized = (docs ?? []).filter((d) => !d.category.trim()).length;
+    const duplicateGroups = findDuplicateGroups(docs ?? []).length;
+    void (async () => {
+      const auto = await getMeta<boolean>("autoOcr", true);
+      const persistedVal = navigator.storage?.persisted ? await navigator.storage.persisted() : null;
+      setHealth({ duplicateGroups, uncategorized, autoOcr: auto, persisted: persistedVal });
+    })();
+  }, [docs]);
 
   return (
     <div className={appFrameClass}>
       <SiteHeader />
-      <main className="mx-auto w-full max-w-2xl px-6 pb-24">
+      <main id={MAIN_CONTENT_ID} className="mx-auto w-full max-w-2xl px-6 pb-24">
         <h1 className="text-ink-serif mt-4 text-3xl font-semibold">Settings</h1>
+
+        <div className="mt-8">
+          <InstallAppCard />
+        </div>
 
         <section id="backup" className="mt-8 rounded-2xl border border-border bg-card p-6">
           <h2 className="flex items-center gap-2 font-semibold">
@@ -101,18 +130,40 @@ function SettingsPage() {
           <p className="mt-2 text-sm text-muted-foreground">
             Your library lives only in this browser. A backup is a ZIP of every original plus
             titles, tags, notes and dates. Every file is checked before a restore changes this
-            library. The backup isn't encrypted.
+            library. You can optionally password-encrypt the export on this device.
           </p>
+          <div className="mt-4 space-y-3">
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox checked={backupEncrypt} onCheckedChange={(v) => setBackupEncrypt(v === true)} />
+              Encrypt backup with a password
+            </label>
+            {backupEncrypt && (
+              <Input
+                type="password"
+                autoComplete="new-password"
+                placeholder="Backup password"
+                value={backupPassword}
+                onChange={(e) => setBackupPassword(e.target.value)}
+                className="max-w-xs"
+              />
+            )}
+          </div>
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <Button
               onClick={async () => {
+                if (backupEncrypt && !backupPassword.trim()) {
+                  toast.error("Enter a password for encrypted export");
+                  return;
+                }
                 const toastId = toast.loading("Exporting backup…");
                 try {
                   const n = await exportBackup({
                     onProgress: (done, total) => toast.loading(`Exporting ${done} of ${total}…`, { id: toastId }),
+                    password: backupEncrypt ? backupPassword : undefined,
                   });
                   const stamp = new Date().toISOString();
                   setLastBackup(stamp);
+                  void setMeta("lastBackup", stamp);
                   toast.success(`Backup downloaded (${n} ${n === 1 ? "document" : "documents"})`, { id: toastId });
                 } catch (err) {
                   console.error(err);
@@ -129,6 +180,51 @@ function SettingsPage() {
               {lastBackup ? ` · last backup ${new Date(lastBackup).toLocaleString()}` : " · never backed up"}
             </p>
           </div>
+
+          <div className="mt-4 flex flex-wrap items-end gap-3">
+            <div>
+              <Label htmlFor="backup-remind" className="text-sm font-medium">
+                Remind me to back up every (days)
+              </Label>
+              <Input
+                id="backup-remind"
+                type="number"
+                min={1}
+                max={365}
+                className="mt-1 w-24"
+                value={backupRemindDays}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setBackupRemindDays(n);
+                  void setMeta("backupRemindDays", n > 0 ? n : 30);
+                }}
+              />
+            </div>
+          </div>
+
+          {health && (
+            <ul className="mt-4 space-y-1.5 rounded-lg border border-border p-3 text-sm">
+              <li>
+                Last backup:{" "}
+                {lastBackup
+                  ? `${Math.floor((Date.now() - Date.parse(lastBackup)) / 86400000)} days ago`
+                  : "never"}
+                {lastBackup && Math.floor((Date.now() - Date.parse(lastBackup)) / 86400000) > backupRemindDays
+                  ? " · overdue"
+                  : ""}
+              </li>
+              <li>Auto-read text from images: {health.autoOcr ? "on" : "off"}</li>
+              <li>
+                Persistent storage:{" "}
+                {health.persisted === null ? "unknown" : health.persisted ? "granted" : "not granted"}
+              </li>
+              <li>
+                Duplicate groups: {health.duplicateGroups}
+                {health.duplicateGroups > 0 ? " · review in Library" : ""}
+              </li>
+              <li>Uncategorized documents: {health.uncategorized}</li>
+            </ul>
+          )}
 
           <RestoreZip
             mode={restoreMode}
@@ -228,6 +324,12 @@ function SettingsPage() {
               <p className="mt-2 text-sm text-muted-foreground">
                 Using {formatSize(storage.usage)} of {formatSize(storage.quota)} the browser has set
                 aside for this site.
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Originals: {formatSize(docs?.reduce((sum, doc) => sum + (doc.size || 0), 0) ?? 0)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Browser figures are estimates and include extracted text, thumbnails and app files.
               </p>
               {persisted === false && (
                 <div className="mt-4">
@@ -353,12 +455,22 @@ function RestoreZip({
         accept=".zip"
         className="hidden"
         onChange={async (e) => {
-          const file = e.target.files?.[0];
+          let file = e.target.files?.[0];
           e.target.value = "";
           if (!file) return;
           setBusy(true);
           const toastId = toast.loading("Checking backup…");
           try {
+            if (await looksEncrypted(file)) {
+              const password = window.prompt("This backup is encrypted. Enter its password:");
+              if (!password) {
+                toast.dismiss(toastId);
+                setBusy(false);
+                return;
+              }
+              const decrypted = await decryptBlob(file, password);
+              file = new File([decrypted], "backup.zip", { type: "application/zip" });
+            }
             const next = await inspectBackup(file, mode);
             setPlan(next);
             toast.dismiss(toastId);
@@ -450,11 +562,16 @@ function CategoriesSection({ docs }: { docs: DocumentRecord[] }) {
   const [pendingRule, setPendingRule] = useState<AutoRule | null>(null);
   const [libraryTags, setLibraryTags] = useState<string[]>([]);
   const [tagName, setTagName] = useState("");
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [pinnedTags, setPinnedTags] = useState<string[]>([]);
 
   const reload = async () => {
     setCustom(await getCustomCategories());
     setRules(await getRules());
     setLibraryTags(await getLibraryTags());
+    const pinned = await getMeta<string[]>("pinnedTags", []);
+    setPinnedTags(Array.isArray(pinned) ? pinned : []);
   };
 
   useEffect(() => {
@@ -463,6 +580,30 @@ function CategoriesSection({ docs }: { docs: DocumentRecord[] }) {
 
   const tags = Array.from(new Set(docs.flatMap((d) => d.tags))).sort((a, b) => a.localeCompare(b));
   const categoryOptions = [...BUILT_IN_CATEGORIES, ...custom];
+
+  const orderedTagList = useMemo(() => {
+    const all = [...new Set([...libraryTags, ...tags])];
+    const pinSet = new Set(pinnedTags);
+    const pinned = pinnedTags.filter((t) => all.includes(t));
+    const rest = all.filter((t) => !pinSet.has(t)).sort((a, b) => a.localeCompare(b));
+    return [...pinned, ...rest];
+  }, [libraryTags, tags, pinnedTags]);
+
+  const togglePin = (tag: string) => {
+    const next = pinnedTags.includes(tag) ? pinnedTags.filter((t) => t !== tag) : [...pinnedTags, tag];
+    setPinnedTags(next);
+    void setMeta("pinnedTags", next);
+  };
+
+  const moveLibraryTag = (tag: string, dir: -1 | 1) => {
+    const list = [...libraryTags];
+    const i = list.indexOf(tag);
+    if (i === -1) return;
+    const j = i + dir;
+    if (j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j]!, list[i]!];
+    void setMeta("libraryTags", list).then(reload);
+  };
 
   return (
     <section className="mt-6 rounded-2xl border border-border bg-card p-6">
@@ -513,19 +654,87 @@ function CategoriesSection({ docs }: { docs: DocumentRecord[] }) {
       <p className="mt-2 text-xs text-muted-foreground">
         Removing a tag takes it off every document. The documents stay.
       </p>
-      {[...new Set([...libraryTags, ...tags])].length === 0 ? (
+      {orderedTagList.length === 0 ? (
         <p className="mt-2 text-sm text-muted-foreground">No tags yet.</p>
       ) : (
         <ul className="mt-2 divide-y divide-border">
-          {[...new Set([...libraryTags, ...tags])].sort((a, b) => a.localeCompare(b)).map((tag) => (
-            <li key={tag} className="flex items-center justify-between py-2 text-sm">
-              <span>{tag}</span>
-              <button
-                className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-                onClick={() => void removeLibraryTag(tag).then(reload)}
-              >
-                Remove
-              </button>
+          {orderedTagList.map((tag) => (
+            <li key={tag} className="flex items-center justify-between gap-3 py-2 text-sm">
+              {renaming === tag ? (
+                <form
+                  className="flex min-w-0 flex-1 gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void renameLibraryTag(tag, renameValue).then(() => {
+                      setRenaming(null);
+                      setRenameValue("");
+                      return reload();
+                    });
+                  }}
+                >
+                  <Input
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    autoFocus
+                    className="h-8"
+                  />
+                  <Button type="submit" size="sm" variant="outline" disabled={!renameValue.trim()}>
+                    Save
+                  </Button>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setRenaming(null)}>
+                    Cancel
+                  </Button>
+                </form>
+              ) : (
+                <>
+                  <span className="min-w-0 truncate">
+                    {pinnedTags.includes(tag) ? "★ " : ""}
+                    {tag}
+                  </span>
+                  <span className="flex shrink-0 flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                      onClick={() => togglePin(tag)}
+                    >
+                      {pinnedTags.includes(tag) ? "Unpin" : "Pin"}
+                    </button>
+                    {libraryTags.includes(tag) && (
+                      <>
+                        <button
+                          type="button"
+                          className="text-xs text-muted-foreground underline"
+                          onClick={() => moveLibraryTag(tag, -1)}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          className="text-xs text-muted-foreground underline"
+                          onClick={() => moveLibraryTag(tag, 1)}
+                        >
+                          ↓
+                        </button>
+                      </>
+                    )}
+                    <button
+                      className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                      onClick={() => {
+                        setRenaming(tag);
+                        setRenameValue(tag);
+                      }}
+                    >
+                      Rename
+                    </button>
+                    <button
+                      className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                      onClick={() => void removeLibraryTag(tag).then(reload)}
+                    >
+                      Remove
+                    </button>
+                  </span>
+                </>
+              )}
             </li>
           ))}
         </ul>

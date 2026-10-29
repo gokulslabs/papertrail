@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DatesRouteImport } from './routes/dates'
+import { Route as ExpensesRouteImport } from './routes/expenses'
 import { Route as LibraryRouteImport } from './routes/library'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as SettingsRouteImport } from './routes/settings'
@@ -25,6 +26,11 @@ const IndexRoute = IndexRouteImport.update({
 const DatesRoute = DatesRouteImport.update({
   id: '/dates',
   path: '/dates',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ExpensesRoute = ExpensesRouteImport.update({
+  id: '/expenses',
+  path: '/expenses',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LibraryRoute = LibraryRouteImport.update({
@@ -56,6 +62,7 @@ const LibraryIdRoute = LibraryIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/dates': typeof DatesRoute
+  '/expenses': typeof ExpensesRoute
   '/library': typeof LibraryRouteWithChildren
   '/privacy': typeof PrivacyRoute
   '/settings': typeof SettingsRoute
@@ -65,6 +72,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/dates': typeof DatesRoute
+  '/expenses': typeof ExpensesRoute
   '/privacy': typeof PrivacyRoute
   '/settings': typeof SettingsRoute
   '/library/$id': typeof LibraryIdRoute
@@ -74,6 +82,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/dates': typeof DatesRoute
+  '/expenses': typeof ExpensesRoute
   '/library': typeof LibraryRouteWithChildren
   '/privacy': typeof PrivacyRoute
   '/settings': typeof SettingsRoute
@@ -85,17 +94,26 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/dates'
+    | '/expenses'
     | '/library'
     | '/privacy'
     | '/settings'
     | '/library/$id'
     | '/library/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/dates' | '/privacy' | '/settings' | '/library/$id' | '/library'
+  to:
+    | '/'
+    | '/dates'
+    | '/expenses'
+    | '/privacy'
+    | '/settings'
+    | '/library/$id'
+    | '/library'
   id:
     | '__root__'
     | '/'
     | '/dates'
+    | '/expenses'
     | '/library'
     | '/privacy'
     | '/settings'
@@ -106,6 +124,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DatesRoute: typeof DatesRoute
+  ExpensesRoute: typeof ExpensesRoute
   LibraryRoute: typeof LibraryRouteWithChildren
   PrivacyRoute: typeof PrivacyRoute
   SettingsRoute: typeof SettingsRoute
@@ -125,6 +144,13 @@ declare module '@tanstack/react-router' {
       path: '/dates'
       fullPath: '/dates'
       preLoaderRoute: typeof DatesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/expenses': {
+      id: '/expenses'
+      path: '/expenses'
+      fullPath: '/expenses'
+      preLoaderRoute: typeof ExpensesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/library': {
@@ -181,6 +207,7 @@ const LibraryRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DatesRoute: DatesRoute,
+  ExpensesRoute: ExpensesRoute,
   LibraryRoute: LibraryRouteWithChildren,
   PrivacyRoute: PrivacyRoute,
   SettingsRoute: SettingsRoute,

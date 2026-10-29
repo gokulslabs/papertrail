@@ -16,15 +16,21 @@ interface BackupDoc {
   size: number;
   addedAt: number;
   updatedAt?: number;
+  fileModifiedAt?: number;
   text: string;
   ocrStatus: DocumentRecord["ocrStatus"];
+  extraction?: DocumentRecord["extraction"];
   pageCount?: number | undefined;
   tags: string[];
   notes: string;
   dates: DocumentRecord["dates"];
   category: string;
   amount: string;
+  documentDate?: string;
   suggested: DocumentRecord["suggested"];
+  sha256?: string;
+  annotations?: DocumentRecord["annotations"];
+  mergedFrom?: string[];
   origin: DocumentRecord["origin"];
   file: string;
   thumbnail?: string;
@@ -34,6 +40,9 @@ interface BackupMeta {
   autoOcr?: boolean;
   rules?: unknown;
   lastBackup?: string;
+  rememberDates?: unknown;
+  expenses?: unknown;
+  expenseCurrency?: unknown;
 }
 
 interface Manifest {
@@ -85,6 +94,8 @@ function uncompressedSize(entry: { _data?: { uncompressedSize?: number } }): num
 export async function exportBackup(opts?: {
   ids?: string[];
   onProgress?: (done: number, total: number) => void;
+  /** When set, the ZIP is encrypted with AES-GCM before download (.enc). */
+  password?: string;
 }): Promise<number> {
   const JSZip = (await import("jszip")).default;
   const wanted = opts?.ids ? new Set(opts.ids) : null;
@@ -98,8 +109,11 @@ export async function exportBackup(opts?: {
     exportedAt: new Date().toISOString(),
     documents: [],
     meta: {
-      autoOcr: await getMeta<boolean>("autoOcr", false),
+      autoOcr: await getMeta<boolean>("autoOcr", true),
       rules: await getMeta("rules", { rules: [], customCategories: [] }),
+      rememberDates: await getMeta("rememberDates", []),
+      expenses: await getMeta("expenses", []),
+      expenseCurrency: await getMeta("expenseCurrency", "USD"),
     },
     ...(wanted ? { partial: true } : {}),
   };
@@ -116,15 +130,21 @@ export async function exportBackup(opts?: {
       size: doc.size,
       addedAt: doc.addedAt,
       ...(typeof doc.updatedAt === "number" ? { updatedAt: doc.updatedAt } : {}),
+      ...(typeof doc.fileModifiedAt === "number" ? { fileModifiedAt: doc.fileModifiedAt } : {}),
       text: doc.text,
       ocrStatus: doc.ocrStatus,
+      ...(doc.extraction ? { extraction: doc.extraction } : {}),
       pageCount: doc.pageCount,
       tags: doc.tags,
       notes: doc.notes,
       dates: doc.dates,
       category: doc.category,
       amount: doc.amount,
+      ...(doc.documentDate ? { documentDate: doc.documentDate } : {}),
       suggested: doc.suggested,
+      ...(doc.sha256 ? { sha256: doc.sha256 } : {}),
+      ...(doc.annotations?.length ? { annotations: doc.annotations } : {}),
+      ...(doc.mergedFrom?.length ? { mergedFrom: doc.mergedFrom } : {}),
       origin: doc.origin,
       file: `files/${doc.id}.${ext}`,
     };
@@ -135,9 +155,15 @@ export async function exportBackup(opts?: {
     manifest.documents.push(entry);
   }
   zip.file("manifest.json", JSON.stringify(manifest, null, 2));
-  const blob = await zip.generateAsync({ type: "blob" });
+  let blob: Blob = await zip.generateAsync({ type: "blob" });
   const stamp = new Date().toISOString().slice(0, 10);
-  downloadBlob(blob, `privytrail-backup-${stamp}.zip`);
+  if (opts?.password?.trim()) {
+    const { encryptBlob } = await import("./crypto-backup");
+    blob = await encryptBlob(blob, opts.password.trim());
+    downloadBlob(blob, `privytrail-backup-${stamp}.zip.enc`);
+  } else {
+    downloadBlob(blob, `privytrail-backup-${stamp}.zip`);
+  }
   const exportedAt = new Date().toISOString();
   await setMeta("lastBackup", exportedAt);
   return docs.length;
@@ -177,9 +203,26 @@ function asDates(value: unknown): DocDate[] {
     if (raw.status === "open" || raw.status === "done" || raw.status === "dismissed") date.status = raw.status;
     if (raw.source === "user" || raw.source === "found") date.source = raw.source;
     if (typeof raw.kind === "string" && isDateKind(raw.kind)) date.kind = raw.kind;
+    if (typeof raw.snippet === "string") date.snippet = raw.snippet;
+    if (raw.recurrence === "yearly" || raw.recurrence === "none") date.recurrence = raw.recurrence;
+    if (typeof raw.snoozeUntil === "number") date.snoozeUntil = raw.snoozeUntil;
     dates.push(date);
   }
   return dates;
+}
+
+function asExtraction(value: unknown): DocumentRecord["extraction"] | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as DocumentRecord["extraction"];
+  if (!raw || typeof raw.source !== "string" || typeof raw.characters !== "number") return undefined;
+  if (!["pdf-text", "ocr", "plain", "none"].includes(raw.source)) return undefined;
+  const out: NonNullable<DocumentRecord["extraction"]> = {
+    source: raw.source,
+    characters: raw.characters,
+  };
+  if (typeof raw.pagesWithText === "number") out.pagesWithText = raw.pagesWithText;
+  if (typeof raw.confidence === "number") out.confidence = raw.confidence;
+  return out;
 }
 
 export async function inspectBackup(zipFile: File | Blob, mode: RestoreMode): Promise<RestorePlan> {
@@ -240,7 +283,7 @@ export async function inspectBackup(zipFile: File | Blob, mode: RestoreMode): Pr
 
     const dates = asDates(entry.dates);
 
-    prepared.push({
+    const restored: DocumentRecord = {
       id: entry.id,
       title: asString(entry.title, "Untitled"),
       fileName: asString(entry.fileName, "file"),
@@ -261,7 +304,25 @@ export async function inspectBackup(zipFile: File | Blob, mode: RestoreMode): Pr
       origin: entry.origin === "sample" ? "sample" : "user",
       blob,
       thumbnail,
-    });
+    };
+    if (typeof entry.fileModifiedAt === "number") restored.fileModifiedAt = entry.fileModifiedAt;
+    const extraction = asExtraction(entry.extraction);
+    if (extraction) restored.extraction = extraction;
+    if (typeof entry.documentDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(entry.documentDate)) {
+      restored.documentDate = entry.documentDate;
+    }
+    if (typeof entry.sha256 === "string" && /^[a-f0-9]{64}$/i.test(entry.sha256)) {
+      restored.sha256 = entry.sha256.toLowerCase();
+    }
+    if (Array.isArray(entry.annotations)) {
+      restored.annotations = entry.annotations.filter(
+        (a) => a && typeof a.id === "string" && typeof a.quote === "string" && typeof a.page === "number",
+      );
+    }
+    if (Array.isArray(entry.mergedFrom)) {
+      restored.mergedFrom = entry.mergedFrom.filter((id): id is string => typeof id === "string");
+    }
+    prepared.push(restored);
     } catch (err) {
       const reason = err instanceof Error ? err.message : "Could not read this file.";
       if (reason === "This backup is too large to restore.") throw err;
@@ -318,6 +379,11 @@ export async function commitRestore(
   if (plan.meta) {
     if (typeof plan.meta.autoOcr === "boolean") await setMeta("autoOcr", plan.meta.autoOcr);
     if (plan.meta.rules && typeof plan.meta.rules === "object") await setMeta("rules", plan.meta.rules);
+    if (Array.isArray(plan.meta.rememberDates)) await setMeta("rememberDates", plan.meta.rememberDates);
+    if (Array.isArray(plan.meta.expenses)) await setMeta("expenses", plan.meta.expenses);
+    if (typeof plan.meta.expenseCurrency === "string" && plan.meta.expenseCurrency.trim()) {
+      await setMeta("expenseCurrency", plan.meta.expenseCurrency.trim().toUpperCase());
+    }
   }
   return written;
 }
@@ -341,6 +407,7 @@ export interface IcsEvent {
   label: string;
   date: string;
   remindDays?: number | null | undefined;
+  recurrence?: "none" | "yearly";
 }
 
 /** Stable across exports so calendar apps update the same event instead of duplicating it. */
@@ -368,6 +435,7 @@ export function buildIcs(events: IcsEvent[]): string {
       `DTEND;VALUE=DATE:${icsDate(nextDay(ev.date))}`,
       `SUMMARY:${icsEscape(`${ev.label} — ${ev.title}`)}`,
       "DESCRIPTION:Exported from Privytrail",
+      ...(ev.recurrence === "yearly" ? ["RRULE:FREQ=YEARLY"] : []),
       ...alarmLines(ev.remindDays),
       "END:VEVENT",
     );
